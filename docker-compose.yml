@@ -1,0 +1,117 @@
+version: '3.8'
+
+# Include Supabase stack (Ensure it effectively uses the same network or vars if needed)
+# Note: Complex includes might need adjustment if they don't share configs well. 
+# For now, we assume supabase/docker-compose.yml is adapted or works as standalone.
+include:
+  - path: app/sysadmin/supabase/docker-compose.yml
+    env_file: ./cmd/config/app.env
+
+secrets:
+  postgres_passwd:
+    file: ./cmd/config/secrets/postgres_passwd
+  jwt_secret:
+    file: ./cmd/config/secrets/jwt_secret
+  grafana_admin_passwd:
+    file: ./cmd/config/secrets/grafana_admin_passwd
+
+services:
+  # ============================
+  # Core Application
+  # ============================
+  backend:
+    build: ./app/backend
+    restart: always
+    env_file:
+      - ./cmd/config/app.env
+    secrets:
+      - jwt_secret
+    environment:
+      - SECRET_KEY_FILE=/run/secrets/jwt_secret
+    expose:
+      - "8080"
+    networks:
+      - quzuu-internal
+
+  frontend:
+    build: ./app/frontend
+    restart: always
+    env_file:
+      - ./cmd/config/app.env
+    expose:
+      - "3000"
+    networks:
+      - quzuu-internal
+
+  # ============================
+  # Networking
+  # ============================
+  nginx:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./app/networking/nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - backend
+      - frontend
+      - grafana
+      - uptimekuma
+    networks:
+      - quzuu-internal
+
+  # ============================
+  # Data
+  # ============================
+  postgres_main:
+    image: postgres:15-alpine
+    restart: always
+    env_file:
+      - ./cmd/config/app.env
+    secrets:
+      - postgres_passwd
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_passwd
+    volumes:
+      - pg_data_main:/var/lib/postgresql/data
+      - ./app/databases/postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - quzuu-internal
+
+  # ============================
+  # Monitoring & Sysadmin
+  # ============================
+  grafana:
+    image: grafana/grafana-oss
+    restart: always
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./app/sysadmin/graphana/provisioning:/etc/grafana/provisioning
+    secrets:
+      - grafana_admin_passwd
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_passwd
+    expose:
+      - "3000"
+    networks:
+      - quzuu-internal
+
+  uptimekuma:
+    image: louislam/uptime-kuma:1
+    restart: always
+    volumes:
+      - uptimekuma_data:/app/data
+    expose:
+      - "3001"
+    networks:
+      - quzuu-internal
+
+networks:
+  quzuu-internal:
+    driver: bridge
+
+volumes:
+  pg_data_main:
+  grafana_data:
+  uptimekuma_data:
